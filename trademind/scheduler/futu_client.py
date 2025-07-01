@@ -1003,4 +1003,140 @@ class FutuClient:
         except Exception as e:
             self.last_error = str(e)
             logger.error(f"条件选股失败: {e}")
+            return {"error": str(e)}
+
+    def get_option_chain(self, code: str, index_option_type: str = "NORMAL", start: str = None, end: str = None, option_type: str = "ALL", option_cond_type: str = "ALL", data_filter: dict = None) -> dict:
+        """
+        获取期权链
+        Args:
+            code: 标的股票代码，如 HK.00700
+            index_option_type: 指数期权类型，仅港股指数期权有效
+            start: 开始日期，到期日 yyyy-MM-dd
+            end: 结束日期，到期日 yyyy-MM-dd
+            option_type: 期权类型 CALL/PUT/ALL
+            option_cond_type: 价内外类型 ALL/OTM/ATM/ITM
+            data_filter: 数据筛选条件 dict
+        Returns:
+            dict: 期权链数据或错误信息
+        """
+        try:
+            if not self.quote_ctx:
+                return {"error": "行情API未连接"}
+            ret1,data1 = self.quote_ctx.get_option_expiration_date(code)
+            if ret1 != ft.RET_OK:
+                return {"error": f"获取期权链到期日失败: {data1}"}
+            expiration_date_list = data1['strike_time'].values.tolist()
+            result = {}
+            for date in expiration_date_list:
+                ret2, data2 = self.quote_ctx.get_option_chain(code=code, start=date, end=date, data_filter=data_filter)
+                if ret2 == ft.RET_OK:
+                    for _, row in data2.iterrows():
+                        strike_time = row.get('strike_time', '')
+                        strike_price = row.get('strike_price', 0)
+                        op_type = row.get('option_type', '')
+                        # call/put 详细信息
+                        call = None
+                        put = None
+                        if op_type == 'CALL':
+                            call = {
+                                "basic": {
+                                    "security": {"market": row.get('market', ''), "code": code},
+                                    "id": row.get('call_id', ''),
+                                    "lotSize": row.get('lot_size', 0),
+                                    "secType": row.get('sec_type', 8),
+                                    "name": row.get('call_name', ''),
+                                    "listTime": row.get('list_time', ''),
+                                    "delisting": row.get('delisting', False)
+                                },
+                                "optionExData": {
+                                    "type": 1,
+                                    "owner": {"market": row.get('market', ''), "code": code.split('.')[-1]},
+                                    "strikeTime": strike_time,
+                                    "strikePrice": strike_price,
+                                    "suspend": row.get('suspend', False),
+                                    "market": row.get('market', ''),
+                                    "strikeTimestamp": row.get('strike_timestamp', 0),
+                                    "expirationCycle": row.get('expiration_cycle', 1),
+                                    "optionStandardType": row.get('option_standard_type', 1),
+                                    "optionSettlementMode": row.get('option_settlement_mode', 2)
+                                }
+                            }
+                        if op_type == 'PUT':
+                            put = {
+                                "basic": {
+                                    "security": {"market": row.get('market', ''), "code": code},
+                                    "id": row.get('put_id', ''),
+                                    "lotSize": row.get('lot_size', 0),
+                                    "secType": row.get('sec_type', 8),
+                                    "name": row.get('put_name', ''),
+                                    "listTime": row.get('list_time', ''),
+                                    "delisting": row.get('delisting', False)
+                                },
+                                "optionExData": {
+                                    "type": 2,
+                                    "owner": {"market": row.get('market', ''), "code": code.split('.')[-1]},
+                                    "strikeTime": strike_time,
+                                    "strikePrice": strike_price,
+                                    "suspend": row.get('suspend', False),
+                                    "market": row.get('market', ''),
+                                    "strikeTimestamp": row.get('strike_timestamp', 0),
+                                    "expirationCycle": row.get('expiration_cycle', 1),
+                                    "optionStandardType": row.get('option_standard_type', 1),
+                                    "optionSettlementMode": row.get('option_settlement_mode', 2)
+                                }
+                            }
+                        if strike_time not in result:
+                            result[strike_time] = {"strikeTime": strike_time, "strikeTimestamp": row.get('strike_timestamp', 0), "option": []}
+                        result[strike_time]["option"].append({"call": call, "put": put})
+                    else:
+                        print('error:', data2)
+                    time.sleep(1)
+            # 转为列表
+            return {"optionChain": list(result.values())}
+        except Exception as e:
+            self.last_error = str(e)
+            logger.error(f"获取期权链失败: {e}")
+            return {"error": str(e)}
+
+    def get_option_expiration_date(self, code: str, index_option_type: str = "NORMAL") -> dict:
+        """
+        获取期权链到期日
+        Args:
+            code: 标的股票代码，如 HK.00700
+            index_option_type: 指数期权类型，仅港股指数期权有效
+        Returns:
+            dict: 到期日数据或错误信息
+        """
+        try:
+            if not self.quote_ctx:
+                return {"error": "行情API未连接"}
+            market = code.split('.')[0] if '.' in code else ''
+            if market != 'HK' and index_option_type != "NORMAL":
+                index_option_type = "NORMAL"
+            index_option_type_map = {
+                "NORMAL": ft.IndexOptionType.NORMAL,
+                "ALL": getattr(ft.IndexOptionType, "ALL", ft.IndexOptionType.NORMAL),
+                "UNKNOWN": getattr(ft.IndexOptionType, "UNKNOWN", ft.IndexOptionType.NORMAL)
+            }
+            ret, data = self.quote_ctx.get_option_expiration_date(
+                code=code,
+                index_option_type=index_option_type_map.get(index_option_type, ft.IndexOptionType.NORMAL)
+            )
+            if ret != ft.RET_OK:
+                return {"error": f"获取期权链到期日失败: {data}"}
+            if data.empty:
+                return {"dateList": []}
+            # 格式化输出
+            date_list = []
+            for _, row in data.iterrows():
+                date_list.append({
+                    "strikeTime": row.get('strike_time', ''),
+                    "strikeTimestamp": row.get('strike_timestamp', 0),
+                    "optionExpiryDateDistance": row.get('option_expiry_date_distance', 0),
+                    "expirationCycle": row.get('expiration_cycle', 'N/A')
+                })
+            return {"dateList": date_list}
+        except Exception as e:
+            self.last_error = str(e)
+            logger.error(f"获取期权链到期日失败: {e}")
             return {"error": str(e)} 

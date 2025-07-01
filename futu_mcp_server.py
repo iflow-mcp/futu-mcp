@@ -54,7 +54,6 @@ def init_futu_client():
         else:
             print("❌ 富途行情API连接失败", file=sys.stderr)
             return False
-            
         if unlock_pwd and futu_client.trade_ctx:
             print("✅ 富途交易API连接成功", file=sys.stderr)
         elif unlock_pwd:
@@ -402,6 +401,49 @@ async def list_tools():
                     }
                 },
                 "required": ["market", "filter_list"],
+                "additionalProperties": False
+            }
+        ),
+
+        Tool(
+            name="get_option_chain",
+            description="获取期权链，支持多种筛选条件",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "code": {"type": "string", "description": "标的股票代码，如 HK.00700"},
+                    "index_option_type": {"type": "string", "description": "指数期权类型，仅港股指数期权有效", "default": "NORMAL"},
+                    "start": {"type": "string", "description": "开始日期，到期日 yyyy-MM-dd", "default": None},
+                    "end": {"type": "string", "description": "结束日期，到期日 yyyy-MM-dd", "default": None},
+                    "option_type": {"type": "string", "description": "期权类型 CALL/PUT/ALL", "default": "ALL"},
+                    "option_cond_type": {"type": "string", "description": "价内外类型 ALL/OTM/ATM/ITM", "default": "ALL"},
+                    "data_filter": {
+                        "type": "object",
+                        "description": "数据筛选条件，可选",
+                        "properties": {
+                            "implied_volatility_min": {"type": "number"},
+                            "implied_volatility_max": {"type": "number"},
+                            "delta_min": {"type": "number"},
+                            "delta_max": {"type": "number"},
+                            "gamma_min": {"type": "number"},
+                            "gamma_max": {"type": "number"},
+                            "vega_min": {"type": "number"},
+                            "vega_max": {"type": "number"},
+                            "theta_min": {"type": "number"},
+                            "theta_max": {"type": "number"},
+                            "rho_min": {"type": "number"},
+                            "rho_max": {"type": "number"},
+                            "net_open_interest_min": {"type": "number"},
+                            "net_open_interest_max": {"type": "number"},
+                            "open_interest_min": {"type": "number"},
+                            "open_interest_max": {"type": "number"},
+                            "vol_min": {"type": "number"},
+                            "vol_max": {"type": "number"}
+                        },
+                        "additionalProperties": False
+                    }
+                },
+                "required": ["code"],
                 "additionalProperties": False
             }
         ),
@@ -810,6 +852,41 @@ async def call_tool(name: str, arguments: dict):
                 type="text",
                 text=output
             )]
+            
+        # 获取期权链
+        elif name == "get_option_chain":
+            code = arguments.get("code")
+            index_option_type = arguments.get("index_option_type", "NORMAL")
+            start = arguments.get("start")
+            end = arguments.get("end")
+            option_type = arguments.get("option_type", "ALL")
+            option_cond_type = arguments.get("option_cond_type", "ALL")
+            data_filter = arguments.get("data_filter")
+
+            result = futu_client.get_option_chain(
+                code=code,
+                index_option_type=index_option_type,
+                start=start,
+                end=end,
+                option_type=option_type,
+                option_cond_type=option_cond_type,
+                data_filter=data_filter
+            )
+            if isinstance(result, dict) and "error" in result:
+                return [TextContent(type="text", text=f"❌ {result['error']}")]
+            # 简单格式化输出
+            output = f"🔗 期权链（{code}）\n" + "="*40 + "\n\n"
+            for chain in result.get("optionChain", []):
+                output += f"到期日: {chain.get('strikeTime', '')}\n"
+                for opt in chain.get("option", []):
+                    call = opt.get("call", {})
+                    put = opt.get("put", {})
+                    if call:
+                        output += f"  CALL: {call['basic']['security']['code']} 行权价: {call['optionExData']['strikePrice']}\n"
+                    if put:
+                        output += f"  PUT:  {put['basic']['security']['code']} 行权价: {put['optionExData']['strikePrice']}\n"
+                output += "\n"
+            return [TextContent(type="text", text=output)]
             
         else:
             return [TextContent(
